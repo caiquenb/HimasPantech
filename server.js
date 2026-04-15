@@ -165,13 +165,13 @@ app.post('/api/formulario', async (req, res) => {
 
 // GET /api/producao/recentes - supervisor vê todos, operador filtra por setor e turno
 app.get('/api/producao/recentes', async (req, res) => {
-  const { perfil, setor, turno } = req.query;
+  const { perfil, setor, turno, limite } = req.query;
 
   let query = supabase
     .from('producao')
     .select('*')
     .order('id', { ascending: false })
-    .limit(5);
+    .limit(parseInt(limite) || 5);
 
   // Operador só vê registros do próprio setor e turno
   if (perfil === 'operador') {
