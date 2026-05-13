@@ -134,7 +134,7 @@ app.post('/api/formulario', async (req, res) => {
   const {
     data, setor, turno, linha, codProducao, produto, peso, codigo_of,
     prodM, prodKg, refugo, motivoRefugo, retalhoM, retalhoKg, motivoRetalho,
-    houveParada,
+    houveParada, usuario,
     codParada1, descParada1, hrsParada1,
     codParada2, descParada2, hrsParada2,
     codParada3, descParada3, hrsParada3,
@@ -148,7 +148,7 @@ app.post('/api/formulario', async (req, res) => {
     .insert([{
       data, setor, turno, linha, codProducao, produto, peso, codigo_of,
       prodM, prodKg, refugo, motivoRefugo, retalhoM, retalhoKg, motivoRetalho,
-      houveParada: houveParada ?? 'Não',
+      houveParada: houveParada ?? 'Não', usuario: usuario || null,
       codParada1: sanitizar(codParada1), descParada1: sanitizar(descParada1), hrsParada1: sanitizar(hrsParada1),
       codParada2: sanitizar(codParada2), descParada2: sanitizar(descParada2), hrsParada2: sanitizar(hrsParada2),
       codParada3: sanitizar(codParada3), descParada3: sanitizar(descParada3), hrsParada3: sanitizar(hrsParada3),
@@ -266,114 +266,58 @@ app.put('/api/producao/:id', async (req, res) => {
 });
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
+// Substitua a rota /api/dashboard existente no seu server.js por esta versão
+// (antes do app.listen())
 
-// ─── METAS (supervisor pode salvar e buscar) ──────────────────────────────────
-app.get('/api/metas', async (req, res) => {
-  const { data, error } = await supabase
-    .from('metas')
-    .select('*')
-    .order('id', { ascending: false })
-    .limit(1)
-    .single();
-
-  if (error || !data) {
-    // Retorna padrão se ainda não tiver metas salvas
-    return res.json({
-      success: true,
-      data: { metaRefugo: null, metaRetalho: null, metaPerdas: null, metaEficiencia: null }
-    });
-  }
-
-  // Mapeia snake_case do banco para camelCase do frontend
-  res.json({
-    success: true,
-    data: {
-      metaRefugo:     data.meta_refugo,
-      metaRetalho:    data.meta_retalho,
-      metaPerdas:     data.meta_perdas,
-      metaEficiencia: data.meta_eficiencia,
-    }
-  });
-});
-
-app.put('/api/metas', async (req, res) => {
-  const { metaRefugo, metaRetalho, metaPerdas, metaEficiencia } = req.body;
-
-  // Monta apenas os campos que foram enviados (null = sem meta definida)
-  const payload = {
-    meta_refugo:     metaRefugo     ?? null,
-    meta_retalho:    metaRetalho    ?? null,
-    meta_perdas:     metaPerdas     ?? null,
-    meta_eficiencia: metaEficiencia ?? null,
-    updated_at:      new Date().toISOString(),
-  };
-
-  // Verifica se já existe um registro
-  const { data: existing } = await supabase
-    .from('metas')
-    .select('id')
-    .limit(1)
-    .single();
-
-  let result;
-  if (existing) {
-    result = await supabase.from('metas').update(payload).eq('id', existing.id).select().single();
-  } else {
-    result = await supabase.from('metas').insert([payload]).select().single();
-  }
-
-  if (result.error) {
-    console.error('Erro ao salvar metas:', result.error.message);
-    return res.status(500).json({ success: false, error: result.error.message });
-  }
-
-  res.json({
-    success: true,
-    data: {
-      metaRefugo:     result.data.meta_refugo,
-      metaRetalho:    result.data.meta_retalho,
-      metaPerdas:     result.data.meta_perdas,
-      metaEficiencia: result.data.meta_eficiencia,
-    }
-  });
-});
-
-
-// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+// GET /api/dashboard?dataInicio=&dataFim=&setor=&turno=
 app.get('/api/dashboard', async (req, res) => {
   const { dataInicio, dataFim, setor, turno } = req.query;
 
   try {
+    // Busca os registros aplicando todos os filtros disponíveis
     let query = supabase.from('producao').select('*');
+
     if (dataInicio) query = query.gte('data', dataInicio);
     if (dataFim)    query = query.lte('data', dataFim);
     if (setor)      query = query.eq('setor', setor);
     if (turno)      query = query.eq('turno', turno);
 
     const { data, error } = await query;
-    if (error) return res.status(500).json({ success: false, message: 'Erro interno' });
+
+    if (error) {
+      console.error('Erro ao buscar dados do dashboard:', error.message);
+      return res.status(500).json({ success: false, message: 'Erro interno' });
+    }
 
     const registros = data || [];
     const HORAS_TURNO = 8;
 
+    // ── Totais gerais ──────────────────────────────────────────────────────
     const producaoTotal     = registros.reduce((a, r) => a + (parseFloat(r.prodKg)            || 0), 0);
     const refugoTotal       = registros.reduce((a, r) => a + (parseFloat(r.refugo)             || 0), 0);
     const retalhoTotal      = registros.reduce((a, r) => a + (parseFloat(r.retalhoKg)         || 0), 0);
     const horasParadasTotal = registros.reduce((a, r) => a + (parseFloat(r.totalHorasParadas) || 0), 0);
     const totalRegistros    = registros.length;
+    const producaoTotalM = registros.reduce((a, r) => a + (parseFloat(r.prodM) || 0), 0);
 
+    // ── KPIs principais ────────────────────────────────────────────────────
     const taxaRefugo       = producaoTotal > 0 ? (refugoTotal / producaoTotal) * 100 : 0;
     const taxaRetalho      = producaoTotal > 0 ? (retalhoTotal / producaoTotal) * 100 : 0;
     const indicePerdas     = producaoTotal > 0 ? ((refugoTotal + retalhoTotal) / producaoTotal) * 100 : 0;
     const eficiencia       = producaoTotal > 0 ? ((producaoTotal - refugoTotal) / producaoTotal) * 100 : 0;
     const tempoMedioParada = totalRegistros > 0 ? horasParadasTotal / totalRegistros : 0;
-    const taxaProducao     = totalRegistros > 0 ? producaoTotal / (totalRegistros * HORAS_TURNO) : 0;
+    const horasProducaoTotal = totalRegistros * HORAS_TURNO;
+    const taxaProducao     = horasProducaoTotal > 0 ? producaoTotal / horasProducaoTotal : 0;
 
-    const { data: todosDados } = await supabase.from('producao').select('setor, turno');
+    // ── Busca lista de setores e turnos disponíveis para os filtros ────────
+    const { data: todosDados } = await supabase
+      .from('producao')
+      .select('setor, turno');
+
     const setoresDisponiveis = [...new Set((todosDados || []).map(r => r.setor).filter(Boolean))].sort();
     const turnosDisponiveis  = [...new Set((todosDados || []).map(r => r.turno).filter(Boolean))].sort();
 
-    // ── Por turno com taxas % ─────────────────────────────────────────────
+    // ── Agrupamento por turno ──────────────────────────────────────────────
     const porTurno = {};
     registros.forEach((r) => {
       const t = r.turno || 'Não informado';
@@ -393,37 +337,35 @@ app.get('/api/dashboard', async (req, res) => {
       horasParadas:  parseFloat(d.horasParadas.toFixed(2)),
       eficiencia:    d.producao > 0 ? parseFloat(((d.producao - d.refugo) / d.producao * 100).toFixed(2)) : 0,
       produtividade: d.registros > 0 ? parseFloat((d.producao / (d.registros * HORAS_TURNO)).toFixed(2)) : 0,
-      taxaRefugo:    d.producao > 0 ? parseFloat((d.refugo  / d.producao * 100).toFixed(2)) : 0,
-      taxaRetalho:   d.producao > 0 ? parseFloat((d.retalho / d.producao * 100).toFixed(2)) : 0,
     }));
 
-    // ── Por linha com taxas % ─────────────────────────────────────────────
+    // ── Agrupamento por linha ──────────────────────────────────────────────
     const porLinha = {};
     registros.forEach((r) => {
       const l = r.linha || 'Não informado';
-      if (!porLinha[l]) porLinha[l] = { producao: 0, refugo: 0, retalho: 0 };
+      if (!porLinha[l]) porLinha[l] = { producao: 0, refugo: 0, retalho: 0, registros: 0 };
       porLinha[l].producao  += parseFloat(r.prodKg)    || 0;
       porLinha[l].refugo    += parseFloat(r.refugo)     || 0;
       porLinha[l].retalho   += parseFloat(r.retalhoKg) || 0;
+      porLinha[l].registros += 1;
     });
 
     const eficienciaPorLinha = Object.entries(porLinha).map(([linha, d]) => ({
       linha,
-      producao:   parseFloat(d.producao.toFixed(2)),
-      refugo:     parseFloat(d.refugo.toFixed(2)),
-      retalho:    parseFloat(d.retalho.toFixed(2)),
+      producao:  parseFloat(d.producao.toFixed(2)),
+      refugo:    parseFloat(d.refugo.toFixed(2)),
+      retalho:   parseFloat(d.retalho.toFixed(2)),
       eficiencia: d.producao > 0 ? parseFloat(((d.producao - d.refugo) / d.producao * 100).toFixed(2)) : 0,
-      taxaRefugo:  d.producao > 0 ? parseFloat((d.refugo  / d.producao * 100).toFixed(2)) : 0,
-      taxaRetalho: d.producao > 0 ? parseFloat((d.retalho / d.producao * 100).toFixed(2)) : 0,
     }));
 
-    // ── Tendência diária ──────────────────────────────────────────────────
+    // ── Tendência de refugo por data ───────────────────────────────────────
+    // Agrupa por data e calcula taxa de refugo diária para mostrar tendência
     const porData = {};
     registros.forEach((r) => {
       const d = r.data;
       if (!porData[d]) porData[d] = { producao: 0, refugo: 0, retalho: 0 };
-      porData[d].producao += parseFloat(r.prodKg)    || 0;
-      porData[d].refugo   += parseFloat(r.refugo)     || 0;
+      porData[d].producao += parseFloat(r.prodKg) || 0;
+      porData[d].refugo   += parseFloat(r.refugo)  || 0;
       porData[d].retalho  += parseFloat(r.retalhoKg) || 0;
     });
 
@@ -431,62 +373,45 @@ app.get('/api/dashboard', async (req, res) => {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([data, d]) => ({
         data,
-        producaoKg:  parseFloat(d.producao.toFixed(2)),
-        taxaRefugo:  d.producao > 0 ? parseFloat((d.refugo  / d.producao * 100).toFixed(2)) : 0,
-        taxaRetalho: d.producao > 0 ? parseFloat((d.retalho / d.producao * 100).toFixed(2)) : 0,
-        refugoKg:    parseFloat(d.refugo.toFixed(2)),
+        taxaRefugo:   d.producao > 0 ? parseFloat((d.refugo  / d.producao * 100).toFixed(2)) : 0,
+        taxaRetalho:  d.producao > 0 ? parseFloat((d.retalho / d.producao * 100).toFixed(2)) : 0,
+        refugoKg:     parseFloat(d.refugo.toFixed(2)),
+        producaoKg:   parseFloat(d.producao.toFixed(2)),
       }));
 
-    // ── Top 10 produtos ───────────────────────────────────────────────────
-    const porProduto = {};
-    registros.forEach((r) => {
-      const key = r.produto || r.codProducao || 'Desconhecido';
-      if (!porProduto[key]) porProduto[key] = { produto: key, prodKg: 0, prodM: 0, registros: 0 };
-      porProduto[key].prodKg    += parseFloat(r.prodKg) || 0;
-      porProduto[key].prodM     += parseFloat(r.prodM)  || 0;
-      porProduto[key].registros += 1;
-    });
+// ── Por operador ──────────────────────────────────────────────────────────
+const porOperador = {};
+registros.forEach((r) => {
+  const op = r.usuario || 'Não informado';
+  if (!porOperador[op]) porOperador[op] = { usuario: op, producao: 0, registros: 0 };
+  porOperador[op].producao  += parseFloat(r.prodKg) || 0;
+  porOperador[op].registros += 1;
+});
+const producaoPorOperador = Object.values(porOperador)
+  .sort((a, b) => b.producao - a.producao)
+  .map(o => ({ ...o, producao: parseFloat(o.producao.toFixed(2)) }));
 
-    const top10Produtos = Object.values(porProduto)
-      .sort((a, b) => b.prodKg - a.prodKg)
-      .slice(0, 10)
-      .map(p => ({ ...p, prodKg: parseFloat(p.prodKg.toFixed(2)), prodM: parseFloat(p.prodM.toFixed(2)) }));
+// ── Top 10 produtos ───────────────────────────────────────────────────
+const porProduto = {};
+registros.forEach((r) => {
+  const key = r.produto || r.codProducao || 'Desconhecido';
+  if (!porProduto[key]) porProduto[key] = { produto: key, prodKg: 0, prodM: 0, registros: 0 };
+  porProduto[key].prodKg    += parseFloat(r.prodKg) || 0;
+  porProduto[key].prodM     += parseFloat(r.prodM)  || 0;
+  porProduto[key].registros += 1;
+});
 
-    // ── Motivos ───────────────────────────────────────────────────────────
-    const contarMotivos = (campo, campoPeso) => {
-      const mapa = {};
-      registros.forEach((r) => {
-        const motivo = r[campo];
-        if (!motivo) return;
-        if (!mapa[motivo]) mapa[motivo] = { motivo, quantidade: 0, kg: 0 };
-        mapa[motivo].quantidade += 1;
-        if (campoPeso) mapa[motivo].kg += parseFloat(r[campoPeso]) || 0;
-      });
-      return Object.values(mapa).sort((a, b) => b.quantidade - a.quantidade).slice(0, 5)
-        .map(m => ({ ...m, kg: parseFloat(m.kg.toFixed(2)) }));
-    };
-
-    // Junta todas as paradas (1, 2 e 3)
-    const motivosParada = (() => {
-      const mapa = {};
-      registros.forEach((r) => {
-        ['descParada1','descParada2','descParada3'].forEach(campo => {
-          const motivo = r[campo];
-          if (!motivo) return;
-          if (!mapa[motivo]) mapa[motivo] = { motivo, quantidade: 0, kg: 0 };
-          mapa[motivo].quantidade += 1;
-          const hKey = campo.replace('desc','hrs');
-          mapa[motivo].kg += parseFloat(r[hKey]) || 0;
-        });
-      });
-      return Object.values(mapa).sort((a, b) => b.quantidade - a.quantidade).slice(0, 5)
-        .map(m => ({ ...m, kg: parseFloat(m.kg.toFixed(2)) }));
-    })();
+const top10Produtos = Object.values(porProduto)
+  .sort((a, b) => b.prodKg - a.prodKg)
+  .slice(0, 10)
+  .map(p => ({ ...p, prodKg: parseFloat(p.prodKg.toFixed(2)), prodM: parseFloat(p.prodM.toFixed(2)) }));
 
     res.json({
       success: true,
       data: {
+        // KPIs principais
         producaoTotal:     parseFloat(producaoTotal.toFixed(2)),
+        producaoTotalM: parseFloat(producaoTotalM.toFixed(2)),  
         refugoTotal:       parseFloat(refugoTotal.toFixed(2)),
         retalhoTotal:      parseFloat(retalhoTotal.toFixed(2)),
         horasParadasTotal: parseFloat(horasParadasTotal.toFixed(2)),
@@ -497,21 +422,74 @@ app.get('/api/dashboard', async (req, res) => {
         tempoMedioParada:  parseFloat(tempoMedioParada.toFixed(2)),
         taxaProducao:      parseFloat(taxaProducao.toFixed(2)),
         totalRegistros,
+        top10Produtos,
+        // Analíticos
         eficienciaPorTurno,
         eficienciaPorLinha,
         tendenciaRefugo,
-        top10Produtos,
-        motivosRefugo:  contarMotivos('motivoRefugo', 'refugo'),
-        motivosRetalho: contarMotivos('motivoRetalho', 'retalhoKg'),
-        motivosParada,
+        // Opções de filtro
         setoresDisponiveis,
         turnosDisponiveis,
+        producaoPorOperador,
       },
     });
   } catch (err) {
     console.error('Erro no dashboard:', err);
     res.status(500).json({ success: false, message: 'Erro interno no servidor' });
   }
+});
+
+app.get('/api/metas', async (req, res) => {
+  const { data, error } = await supabase
+    .from('metas').select('*')
+    .order('id', { ascending: false }).limit(1).single();
+  if (error || !data) {
+    return res.json({ success: true,
+      data: { metaRefugo: null, metaRetalho: null, metaPerdas: null, metaEficiencia: null }
+    });
+  }
+  res.json({ success: true, data: {
+    metaRefugo: data.meta_refugo, metaRetalho: data.meta_retalho,
+    metaPerdas: data.meta_perdas, metaEficiencia: data.meta_eficiencia,
+  }});
+});
+
+app.put('/api/metas', async (req, res) => {
+  const { metaRefugo, metaRetalho, metaPerdas, metaEficiencia } = req.body;
+  const payload = {
+    meta_refugo: metaRefugo ?? null, meta_retalho: metaRetalho ?? null,
+    meta_perdas: metaPerdas ?? null, meta_eficiencia: metaEficiencia ?? null,
+    updated_at: new Date().toISOString(),
+  };
+  const { data: existing } = await supabase.from('metas').select('id').limit(1).single();
+  let result;
+  if (existing) {
+    result = await supabase.from('metas').update(payload).eq('id', existing.id).select().single();
+  } else {
+    result = await supabase.from('metas').insert([payload]).select().single();
+  }
+  if (result.error) return res.status(500).json({ success: false });
+  res.json({ success: true, data: {
+    metaRefugo: result.data.meta_refugo, metaRetalho: result.data.meta_retalho,
+    metaPerdas: result.data.meta_perdas, metaEficiencia: result.data.meta_eficiencia,
+  }});
+});
+// GET /api/operadores/:setor - busca operadores de um setor específico
+app.get('/api/operadores/:setor', async (req, res) => {
+  const { setor } = req.params;
+
+  const { data, error } = await supabase
+    .from('usuarios')
+    .select('id, usuario')
+    .eq('setor', setor)
+    .eq('perfil', 'operador')
+    .order('usuario');
+
+  if (error) {
+    console.error('Erro ao buscar operadores:', error.message);
+    return res.status(500).json({ error: 'Erro ao buscar operadores' });
+  }
+  res.json({ success: true, data: data || [] });
 });
 
 // ─── INICIAR SERVIDOR ─────────────────────────────────────────────────────────
