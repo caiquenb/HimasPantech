@@ -271,7 +271,7 @@ app.put('/api/producao/:id', async (req, res) => {
 
 // GET /api/dashboard?dataInicio=&dataFim=&setor=&turno=
 app.get('/api/dashboard', async (req, res) => {
-  const { dataInicio, dataFim, setor, turno } = req.query;
+  const { dataInicio, dataFim, setor, turno, produto } = req.query;
 
   try {
     // Busca os registros aplicando todos os filtros disponíveis
@@ -281,6 +281,7 @@ app.get('/api/dashboard', async (req, res) => {
     if (dataFim)    query = query.lte('data', dataFim);
     if (setor)      query = query.eq('setor', setor);
     if (turno)      query = query.eq('turno', turno);
+    if (produto)    query = query.eq('produto', produto);
 
     const { data, error } = await query;
 
@@ -383,68 +384,25 @@ app.get('/api/dashboard', async (req, res) => {
 const porOperador = {};
 registros.forEach((r) => {
   const op = r.usuario || 'Não informado';
-  if (!porOperador[op]) porOperador[op] = { usuario: op, producao: 0, registros: 0 };
-  porOperador[op].producao  += parseFloat(r.prodKg) || 0;
-  porOperador[op].registros += 1;
+  if (!porOperador[op]) porOperador[op] = { usuario: op, producao: 0, refugo: 0, retalho: 0, horasParadas: 0, registros: 0 };
+  porOperador[op].producao     += parseFloat(r.prodKg)            || 0;
+  porOperador[op].refugo       += parseFloat(r.refugo)             || 0;
+  porOperador[op].retalho      += parseFloat(r.retalhoKg)         || 0;
+  porOperador[op].horasParadas += parseFloat(r.totalHorasParadas) || 0;
+  porOperador[op].registros    += 1;
 });
 const producaoPorOperador = Object.values(porOperador)
   .sort((a, b) => b.producao - a.producao)
-  .map(o => ({ ...o, producao: parseFloat(o.producao.toFixed(2)) }));
-
-// ── Motivos de parada mais frequentes ────────────────────────────────────
-const contagemMotivos = {};
-registros.forEach(r => {
-  ['descParada1', 'descParada2', 'descParada3'].forEach(campo => {
-    const v = r[campo];
-    if (v && v.trim() !== '' && v.trim() !== 'Não') {
-      contagemMotivos[v] = (contagemMotivos[v] || 0) + 1;
-    }
-  });
-});
-const motivosParada = Object.entries(contagemMotivos)
-  .sort((a, b) => b[1] - a[1])
-  .slice(0, 8)
-  .map(([descricao, total]) => ({ descricao, total }));
-
-// ── Motivos de refugo mais frequentes ────────────────────────────────────
-const contagemRefugo = {};
-registros.forEach(r => {
-  const v = r.motivoRefugo;
-  if (v && v.trim() !== '' && v.trim() !== 'Não') {
-    contagemRefugo[v] = (contagemRefugo[v] || 0) + 1;
-  }
-});
-const motivosRefugo = Object.entries(contagemRefugo)
-  .sort((a, b) => b[1] - a[1])
-  .slice(0, 8)
-  .map(([descricao, total]) => ({ descricao, total }));
-
-// ── Motivos de retalho mais frequentes ───────────────────────────────────
-const contagemRetalho = {};
-registros.forEach(r => {
-  const v = r.motivoRetalho;
-  if (v && v.trim() !== '' && v.trim() !== 'Não') {
-    contagemRetalho[v] = (contagemRetalho[v] || 0) + 1;
-  }
-});
-const motivosRetalho = Object.entries(contagemRetalho)
-  .sort((a, b) => b[1] - a[1])
-  .slice(0, 8)
-  .map(([descricao, total]) => ({ descricao, total }));
-
-// ── Linha com mais problemas de parada ───────────────────────────────────
-const paradasPorLinha = {};
-registros.forEach(r => {
-  const l = r.linha || 'Não informado';
-  if (!paradasPorLinha[l]) paradasPorLinha[l] = { linha: l, totalParadas: 0, horasParadas: 0 };
-  ['descParada1', 'descParada2', 'descParada3'].forEach(campo => {
-    const v = r[campo];
-    if (v && v.trim() !== '' && v.trim() !== 'Não') paradasPorLinha[l].totalParadas += 1;
-  });
-  paradasPorLinha[l].horasParadas = parseFloat((paradasPorLinha[l].horasParadas + (parseFloat(r.totalHorasParadas) || 0)).toFixed(2));
-});
-const linhaMaisProblemas = Object.values(paradasPorLinha)
-  .sort((a, b) => b.totalParadas - a.totalParadas)[0] || null;
+  .map(o => ({
+    ...o,
+    producao:     parseFloat(o.producao.toFixed(2)),
+    refugo:       parseFloat(o.refugo.toFixed(2)),
+    retalho:      parseFloat(o.retalho.toFixed(2)),
+    horasParadas: parseFloat(o.horasParadas.toFixed(2)),
+    taxaRefugo:   o.producao > 0 ? parseFloat((o.refugo  / o.producao * 100).toFixed(2)) : 0,
+    taxaRetalho:  o.producao > 0 ? parseFloat((o.retalho / o.producao * 100).toFixed(2)) : 0,
+    eficiencia:   o.producao > 0 ? parseFloat(((o.producao - o.refugo) / o.producao * 100).toFixed(2)) : 0,
+  }));
 
 // ── Top 10 produtos ───────────────────────────────────────────────────
 const porProduto = {};
@@ -486,10 +444,6 @@ const top10Produtos = Object.values(porProduto)
         setoresDisponiveis,
         turnosDisponiveis,
         producaoPorOperador,
-        motivosParada,
-        motivosRefugo,
-        motivosRetalho,
-        linhaMaisProblemas,
       },
     });
   } catch (err) {
